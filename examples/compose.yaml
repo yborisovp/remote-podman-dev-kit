@@ -1,0 +1,28 @@
+# Copy this to ../compose.yaml to try the sample. Keep your own Compose file for a real project.
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: myapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  redis:
+    image: docker.io/library/redis:7-alpine
+    ports:
+      - "6379:6379"
+  api:
+    build:
+      context: ./examples/api
+      dockerfile: Containerfile
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+volumes:
+  postgres-data:

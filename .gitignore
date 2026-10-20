@@ -1,0 +1,7 @@
+config/dev.env
+.runtime/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
