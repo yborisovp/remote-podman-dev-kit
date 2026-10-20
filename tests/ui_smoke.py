@@ -59,7 +59,8 @@ class Terminal:
                 try:
                     self.buffer += os.read(self.master, 65536)
                 except OSError:
-                    break
+                    # Linux reports PTY EIO just before waitpid observes exit.
+                    time.sleep(.01)
         if self.proc.poll() is None:
             raise AssertionError(('Terminal did not exit', self.buffer.decode(errors='replace')))
         return self.proc.returncode
