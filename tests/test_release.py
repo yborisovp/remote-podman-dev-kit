@@ -121,6 +121,16 @@ class Publisher(unittest.TestCase):
             self.invoke()
         self.assertEqual(len(self.calls), 1)
 
+    def test_superseded_main_does_not_publish(self):
+        original_api = self.api
+        def newer_main(*args):
+            if '/git/ref/heads/main' in args[-1]:
+                return {'object': {'sha': 'c' * 40}}
+            return original_api(*args)
+        self.api = newer_main
+        self.invoke()
+        self.assertEqual(self.calls, [])
+
     def test_wrong_repository_is_rejected(self):
         self.run['repository']['full_name'] = 'attacker/other'
         with self.assertRaisesRegex(RuntimeError, 'Unexpected workflow'):

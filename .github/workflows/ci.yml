@@ -34,9 +34,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: remote-dev-${{ github.run_id }}-${{ github.run_attempt }}
+          name: remote-dev-${{ github.run_id }}
           path: |
             dist/remote-dev.tar.gz
             dist/remote-dev.tar.gz.sha256
+          # Keep the package available when only a failed matrix job is re-run.
+          overwrite: true
           if-no-files-found: error
           retention-days: 14
