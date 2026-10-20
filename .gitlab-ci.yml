@@ -4,14 +4,13 @@ default:
 verify:
   stage: test
   script:
-    - pip install PyYAML
-    - bash tests/smoke.sh
-    - python3 tests/ui_smoke.py
-    - python3 -m unittest discover -s tests -p 'test_*.py'
+    - python3 -m pip install PyYAML==6.0.2
+    - bash scripts/verify.sh
 package:
   stage: package
   script:
     - bash scripts/package.sh
+    - python3 tests/verify_package.py dist/remote-dev.tar.gz
   artifacts:
     name: remote-dev-$CI_COMMIT_SHORT_SHA
     paths:

@@ -29,6 +29,15 @@ class Terminal:
         self.buffer = b''
         while select.select([self.master], [], [], 0)[0]:
             os.read(self.master, 65536)
+        # A menu title is printed before Bash switches the terminal into its
+        # single-key read. Wait for that mode instead of racing the mode switch,
+        # which can discard a queued key (especially on macOS).
+        if '\n' not in value:
+            deadline = time.monotonic() + 5
+            while termios.tcgetattr(self.master)[3] & termios.ICANON:
+                if time.monotonic() >= deadline:
+                    raise AssertionError('Menu did not enter single-key input mode')
+                time.sleep(.01)
         os.write(self.master, value.encode())
     def expect(self, value):
         target = value.encode()

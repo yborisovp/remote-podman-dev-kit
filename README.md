@@ -1,12 +1,25 @@
 # Download, unpack and go
 
-GitLab CI tests this kit and publishes `dist/remote-dev.tar.gz` in the **package** job artifacts. Extract it into your repository and run `./remote-dev/dev.sh`. Rename or move the single `remote-dev/` directory as needed. Build locally with `bash scripts/package.sh`.
+Download the ready-to-use archive from the [latest GitHub Release](https://github.com/yborisovp/remote-podman-dev-kit/releases/latest). GitLab CI also tests this kit and publishes `dist/remote-dev.tar.gz` in the **package** job artifacts. Extract it into your repository and run `./remote-dev/dev.sh`. Rename or move the single `remote-dev/` directory as needed. Build locally with `bash scripts/package.sh`.
 
 Compose discovery prefers the directory containing `dev.sh`, then its parent. Set `PROJECT_DIR` in `config/dev.env` for any other location (absolute or relative to the kit). Compose paths are relative to that project root, which is uploaded to Linux. Configuration and runtime state stay inside the kit and are excluded from uploads. Close tunnels before moving the kit.
 
 Full installation accepts an administrative SSH alias or `user@host` on Debian/Ubuntu. It uses existing SSH configuration and interactive sudo when needed. No direct root SSH login is required. Leave `SSH_PORT` empty to honor the alias port. First ensure `ssh your-alias` works using an existing key or password. The installer creates and authorizes a separate project key automatically; add it to ssh-agent if passphrase-protected before running noninteractive check/start commands. Existing-user setup preserves existing SSH authentication without creating another key. New project connections use `project-user@your-alias`, retaining alias host/proxy settings.
 
 See [the updated Russian guide](README.RU.md) for configuration, operation, limitations and tests.
+
+## GitHub release automation
+
+Every push to `main` and PR targeting `main` is verified on Ubuntu and macOS. A separate trusted `workflow_run` publisher releases the verified archive and SHA-256:
+
+- `main`: stable `vX.Y.Z`, based on whole words in commit messages since the last stable tag. `major` wins over `minor`, which wins over `patch`; no marker defaults to patch. Lower components reset on major/minor bumps. Examples: `[major] Change config`, `[minor] Add feature`, `[patch] Fix login`. PR text only counts when included in a merged commit message.
+- PR: a unique `pr-<number>-build-<run_id>-<attempt>` prerelease for each successful attempt, including forks. It identifies the tested PR head commit, never becomes Latest, and never affects stable version numbering. Only install previews from contributors you trust.
+
+Stable publication is serialized; assets are uploaded to a draft before publication. Re-running **Actions → Verify and package → Run workflow** on `main` recovers an unfinished publication and leaves existing published releases unchanged. A superseded main build is skipped; the next successful current build includes accumulated changes. CI artifacts expire after 14 days; release assets remain available.
+
+No PAT is required. Only the publisher has `contents: write` through `GITHUB_TOKEN`; it executes trusted main scripts and never extracts or executes PR archives. Repository rules must permit Actions and creation of release tags by that token. Publication is performed in the same workflow as tag creation, avoiding reliance on token-generated events triggering another workflow.
+
+Run `bash scripts/verify.sh` locally (Python 3 and PyYAML required). GitLab CI uses the same checks and produces an artifact without publishing releases. CI does not exercise a real Debian installation.
 
 ## Reference
 
