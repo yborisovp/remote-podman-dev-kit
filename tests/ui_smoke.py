@@ -50,11 +50,26 @@ class Terminal:
                     break
         assert target in self.buffer, (value, self.buffer.decode(errors='replace'))
         self.buffer = self.buffer.split(target, 1)[1]
+    def wait_exit(self, timeout=15):
+        # Drain PTY output while waiting: macOS can block process exit (and even
+        # SIGKILL completion) if terminal output has not been consumed.
+        deadline = time.monotonic() + timeout
+        while self.proc.poll() is None and time.monotonic() < deadline:
+            if select.select([self.master], [], [], .1)[0]:
+                try:
+                    self.buffer += os.read(self.master, 65536)
+                except OSError:
+                    break
+        if self.proc.poll() is None:
+            raise AssertionError(('Terminal did not exit', self.buffer.decode(errors='replace')))
+        return self.proc.returncode
     def close(self):
         if self.proc.poll() is None:
             self.proc.kill()
-        self.proc.wait(timeout=5)
-        os.close(self.master)
+        try:
+            self.wait_exit(timeout=5)
+        finally:
+            os.close(self.master)
 
 with tempfile.TemporaryDirectory(prefix='podman-ui-') as tmp:
     project = Path(tmp) / 'kit'
@@ -76,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='podman-ui-') as tmp:
         term.send('q')
         term.expect('WELCOME')
         term.send('q')
-        assert term.proc.wait(timeout=5) == 0
+        assert term.wait_exit() == 0
         assert not config.exists()
     finally:
         term.close()
@@ -100,7 +115,7 @@ mv "$(dirname "$0")/config/new.env" "$(dirname "$0")/config/dev.env"
         term.send('q')
         term.expect('test-user@mock-host')
         term.send('q')
-        assert term.proc.wait(timeout=5) == 0
+        assert term.wait_exit() == 0
     finally:
         term.close()
     term = Terminal(project, ['bash', '-c', 'source "$1/lib/ui.sh"; SERVICE_NAMES=(worker database); SERVICE_LPORTS=("8000,8001" "-"); ui_select_services && printf "RESULT:%s\\n" "${SELECTED[*]}"', 'bash', str(project)])
@@ -114,7 +129,7 @@ mv "$(dirname "$0")/config/new.env" "$(dirname "$0")/config/dev.env"
         term.expect('[x] database')
         term.send('\n')
         term.expect('RESULT:database')
-        assert term.proc.wait(timeout=5) == 0
+        assert term.wait_exit() == 0
     finally:
         term.close()
 print('PASS: first run, help without config, failure recovery, arrows, setup routing, config reload, service toggles and cancel')
