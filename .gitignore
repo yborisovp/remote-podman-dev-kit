@@ -5,3 +5,8 @@ config/dev.env
 !.env.example
 __pycache__/
 *.pyc
+
+dist/
+.DS_STORE
+api/bin/
+api/obj/

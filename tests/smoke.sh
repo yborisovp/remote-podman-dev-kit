@@ -98,6 +98,22 @@ if bash "$TMP_DIR/project/dev.sh" start missing >/dev/null 2>&1; then printf 'Un
 rm "$TMP_DIR/project/docker-compose.yml"
 if bash "$TMP_DIR/project/dev.sh" start a >/dev/null 2>&1; then printf 'Missing Compose accepted\n' >&2; exit 1; fi
 bash "$TMP_DIR/project/setup.sh" developer@mock-host >/dev/null
-printf 'developer\ny\n' | bash "$TMP_DIR/project/setup.sh" full >/dev/null
+printf 'admin-alias\ndeveloper\ny\n' | bash "$TMP_DIR/project/setup.sh" full >/dev/null
+grep -q 'sudo -- bash -c' "$MOCK_SSH_LOG"
 grep -q 'python3-yaml' "$MOCK_SSH_LOG"
+# Move the kit below a project root, preserve secrets, and exercise parent discovery.
+mkdir "$TMP_DIR/parent"
+mv "$TMP_DIR/project" "$TMP_DIR/parent/tools"
+printf 'services: {}\n' > "$TMP_DIR/parent/compose.yaml"
+printf 'SECRET=fixture\n' > "$TMP_DIR/parent/tools/config/dev.env.private"
+bash "$TMP_DIR/parent/tools/dev.sh" start headless >/dev/null
+python3 - "$MOCK_REMOTE" <<'PYTEST'
+import json, pathlib, sys
+state=json.loads((pathlib.Path(sys.argv[1])/'.cache/remote-podman-dev/smoke/active.json').read_text())
+workspace=pathlib.Path(state['workspace'])
+assert (workspace/'compose.yaml').exists()
+assert not (workspace/'tools/config/dev.env').exists()
+assert not (workspace/'tools/.runtime').exists()
+PYTEST
+bash "$TMP_DIR/parent/tools/dev.sh" stop >/dev/null
 printf 'PASS: Compose discovery, real remote adapter with mocked provider, dependencies, multiple ports, source transfer, tunnels, status/stop and setup\n'

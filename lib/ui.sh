@@ -37,8 +37,17 @@ ui_choose() {
 ui_config_value() { [[ ! -f "$CONFIG_FILE" ]] || awk -F= -v key="$1" '{ sub(/\r$/, "") } $1 == key { print substr($0,index($0,"=")+1); exit }' "$CONFIG_FILE"; }
 ui_ensure_config() {
   [[ ! -f "$CONFIG_FILE" ]] || return 0
-  local project
-  project="$(basename "$ROOT_DIR" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g;s/^[^a-z0-9]*//;s/^$/project/' | cut -c1-40)"
+  local project project_root="$ROOT_DIR" file
+  local local_compose=0
+  for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    [[ ! -f "$ROOT_DIR/$file" ]] || local_compose=1
+  done
+  if ((local_compose == 0)); then
+    for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+      if [[ -f "$(dirname "$ROOT_DIR")/$file" ]]; then project_root="$(dirname "$ROOT_DIR")"; break; fi
+    done
+  fi
+  project="$(basename "$project_root" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g;s/^[^a-z0-9]*//;s/^$/project/' | cut -c1-40)"
   umask 077
   sed "s/^PROJECT_NAME=.*/PROJECT_NAME=$project/" "$ROOT_DIR/config/dev.env.example" > "$CONFIG_FILE"
 }

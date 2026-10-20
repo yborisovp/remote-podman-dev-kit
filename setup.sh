@@ -16,7 +16,7 @@ source "$ROOT_DIR/lib/ui.sh"
 ui_ensure_config || fail "Cannot create project configuration."
 
 read_config() {
-  PODMAN_HOST=; ROOT_HOST=; SSH_PORT=22; SSH_KEY=; PROJECT_NAME=myapp
+  PODMAN_HOST=; ROOT_HOST=; SSH_PORT=; SSH_KEY=; PROJECT_NAME=myapp
   REMOTE_BASE=.cache/remote-podman-dev; COMPOSE_FILE=; COMPOSE_OVERRIDE=; REMOTE_PORT_OFFSET=10000
   REQUIRED_ENDPOINTS_FILE=config/required-endpoints.conf
   local key value
@@ -25,7 +25,7 @@ read_config() {
     case "${key:-}" in
       PODMAN_HOST) PODMAN_HOST="$value";; ROOT_HOST) ROOT_HOST="$value";; SSH_PORT) SSH_PORT="$value";;
       SSH_KEY) SSH_KEY="$value";; PROJECT_NAME) PROJECT_NAME="$value";; REMOTE_BASE) REMOTE_BASE="$value";;
-      COMPOSE_FILE) COMPOSE_FILE="$value";; COMPOSE_OVERRIDE) COMPOSE_OVERRIDE="$value";; REMOTE_PORT_OFFSET) REMOTE_PORT_OFFSET="$value";; REQUIRED_ENDPOINTS_FILE) REQUIRED_ENDPOINTS_FILE="$value";;
+      PROJECT_DIR) PROJECT_DIR="$value";; COMPOSE_FILE) COMPOSE_FILE="$value";; COMPOSE_OVERRIDE) COMPOSE_OVERRIDE="$value";; REMOTE_PORT_OFFSET) REMOTE_PORT_OFFSET="$value";; REQUIRED_ENDPOINTS_FILE) REQUIRED_ENDPOINTS_FILE="$value";;
       ''|\#*) ;;
       SERVICES_FILE) fail "Legacy config: replace SERVICES_FILE with COMPOSE_FILE using config/dev.env.example.";;
       *) fail "Unknown config key: $key";;
@@ -64,36 +64,27 @@ ensure_key() {
 install_for_existing_user() {
   local host="$1"
   valid_host "$host" || fail 'Set a valid PODMAN_HOST or pass user@host.'
-  ensure_key
   save_config "$host" "$ROOT_HOST" "$SSH_KEY"
-  note "Adding the public key to $host. SSH may prompt for the Linux account password once; it is never saved."
-  if command -v ssh-copy-id >/dev/null 2>&1; then
-    ssh-copy-id -i "$SSH_KEY.pub" -p "$SSH_PORT" "$host" || fail 'Could not install the public key. Check the initial SSH credentials and server policy.'
-  else
-    ssh -p "$SSH_PORT" -o StrictHostKeyChecking=ask -t "$host" \
-      "umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; printf '%s\\n' $(quote "$PUBLIC_KEY") >> ~/.ssh/authorized_keys; chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys" || fail 'Could not install the public key.'
-  fi
+  local -a account_args=(-o ConnectTimeout=10 -o StrictHostKeyChecking=ask -t)
+  [[ -z "$SSH_PORT" ]] || account_args+=(-p "$SSH_PORT")
+  [[ -z "$SSH_KEY" ]] || account_args+=(-i "$SSH_KEY")
   note 'Checking Linux Podman installation and enabling the rootless user socket.'
-  ssh -p "$SSH_PORT" -i "$SSH_KEY" -o IdentitiesOnly=yes -t "$host" \
+  ssh "${account_args[@]}" "$host" \
     'python3 -c "import yaml" || { echo "Install python3-yaml on Linux" >&2; exit 1; }; (command -v docker-compose >/dev/null || docker compose version >/dev/null) || { echo "Install a Compose provider on Linux" >&2; exit 1; }; command -v podman >/dev/null || { echo "Install Podman on Linux first; see README.md" >&2; exit 1; }; systemctl --user enable --now podman.socket && podman info --format "{{.Host.Security.Rootless}}" | grep -qi true || exit 1; if command -v loginctl >/dev/null && ! loginctl show-user "$USER" -p Linger --value 2>/dev/null | grep -qi yes; then echo "Enabling linger may ask for sudo access."; sudo loginctl enable-linger "$USER" || exit 1; fi' || fail 'Linux setup did not complete. See README.md.'
-  ok 'SSH key access and rootless Podman are configured.'
+  ok 'SSH access and rootless Podman are configured.'
   note 'Review config/dev.env, then run ./dev.sh check.'
 }
 
 full_setup() {
   read_config
-  [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && ((10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536)) || fail 'SSH_PORT must be between 1 and 65535.'
+  [[ -z "$SSH_PORT" ]] || { [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && ((10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536)); } || fail 'SSH_PORT must be between 1 and 65535.'
   [[ "$PROJECT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$ ]] || fail 'Invalid PROJECT_NAME in config/dev.env.'
 
   local root_host host_part local_user username candidate endpoint_file image registry endpoint_blob=''
   root_host="$ROOT_HOST"
   if [[ -z "$root_host" ]]; then
-    host_part="${PODMAN_HOST#*@}"
-    if [[ -n "$PODMAN_HOST" && "$host_part" != "$PODMAN_HOST" ]]; then root_host="root@$host_part"; fi
-  fi
-  if [[ -z "$root_host" ]]; then
-    printf 'Root SSH target (for example root@linux-host): '
-    IFS= read -r root_host || fail 'No root SSH target entered.'
+    printf 'Administrative SSH target (user@host or SSH alias; sudo supported): '
+    IFS= read -r root_host || fail 'No administrative SSH target entered.'
   fi
   valid_host "$root_host" || fail 'ROOT_HOST must be an SSH alias or user@host using letters, digits, ., _, @, :, and -.'
 
@@ -129,7 +120,7 @@ full_setup() {
   done
 
   ensure_key
-  printf '\nFull setup will use root access at %s:%s and create/use Linux user %s.\n' "$root_host" "$SSH_PORT" "$username"
+  printf '\nFull setup will use administrative access at %s (port: %s) and create/use Linux user %s.\n' "$root_host" "${SSH_PORT:-SSH config}" "$username"
   printf 'It checks required TCP endpoints, installs missing Podman/Docker/Compose packages on Debian or Ubuntu, creates the rootless user, installs this SSH public key, and enables linger. Docker Engine runs as root; the project user is not added to the docker group.\n'
   printf 'Continue? [y/N] '
   local answer; IFS= read -r answer || fail 'Could not read confirmation.'
@@ -141,7 +132,7 @@ set -euo pipefail
 dev_user="$1"
 pubkey="$2"
 endpoints="$3"
-[[ "$(id -u)" == 0 ]] || { echo 'Full setup requires an SSH session as root.' >&2; exit 10; }
+[[ "$(id -u)" == 0 ]] || { echo 'Full setup requires root privileges through sudo or root login.' >&2; exit 10; }
 . /etc/os-release
 os_family="${ID:-} ${ID_LIKE:-}"
 if [[ "$os_family" != *debian* && "$os_family" != *ubuntu* ]]; then
@@ -210,23 +201,25 @@ printf 'Prepared rootless account %s (no password set; SSH public-key access ins
 REMOTE_SCRIPT
 )
   remote_command="bash -c $(quote "$remote_script") -- $(quote "$username") $(quote "$PUBLIC_KEY") $(quote "$endpoint_blob")"
-  note "Connecting to $root_host as root. SSH may request a password or key passphrase; neither is saved."
-  local -a root_ssh_args=(-p "$SSH_PORT" -o ConnectTimeout=10 -o StrictHostKeyChecking=ask -tt)
-  [[ -z "$SSH_KEY" ]] || root_ssh_args+=(-i "$SSH_KEY")
-  ssh "${root_ssh_args[@]}" "$root_host" "$remote_command" || fail 'Full server setup failed. See the remote error above; review README before retrying.'
+  # Keep stdin attached to the remote terminal so sudo can ask for a password.
+  remote_command="if [ \"\$(id -u)\" = 0 ]; then $remote_command; else sudo -- $remote_command; fi"
+  note "Connecting to $root_host using SSH configuration. SSH and sudo may ask for credentials; they are never saved."
+  local -a root_ssh_args=(-o ConnectTimeout=10 -o StrictHostKeyChecking=ask -tt)
+  [[ -z "$SSH_PORT" ]] || root_ssh_args+=(-p "$SSH_PORT")
+  ssh "${root_ssh_args[@]}" "$root_host" "$remote_command" || fail 'Full server setup failed. Check SSH access, sudo permission and the remote error above.'
 
   host_part="${root_host#*@}"
   PODMAN_HOST="$username@$host_part"
   save_config "$PODMAN_HOST" "$root_host" "$SSH_KEY"
   note 'Checking the new project account and enabling its rootless Podman user socket.'
-  ssh -p "$SSH_PORT" -i "$SSH_KEY" -o IdentitiesOnly=yes -t "$PODMAN_HOST" \
+  ssh "${root_ssh_args[@]}" -i "$SSH_KEY" "$PODMAN_HOST" \
     'systemctl --user enable --now podman.socket && podman info --format "{{.Host.Security.Rootless}}" | grep -qi true' || fail 'The account was prepared, but the rootless Podman check failed. Review Linux user-session and linger setup.'
   ok "Full setup finished. PODMAN_HOST is now $PODMAN_HOST."
   note 'Run ./dev.sh check, then choose services with ./dev.sh.'
 }
 
 read_config
-[[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536)) || fail "Invalid SSH_PORT."
+[[ -z "$SSH_PORT" ]] || { [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536)); } || fail "Invalid SSH_PORT."
 [[ "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]{0,39}$ ]] || fail "Invalid PROJECT_NAME: use lowercase letters, digits, _ or -."
 action="${1:-setup}"
 case "$action" in

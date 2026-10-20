@@ -1,4 +1,14 @@
-# Remote Podman Dev Kit
+# Download, unpack and go
+
+GitLab CI tests this kit and publishes `dist/remote-dev.tar.gz` in the **package** job artifacts. Extract it into your repository and run `./remote-dev/dev.sh`. Rename or move the single `remote-dev/` directory as needed. Build locally with `bash scripts/package.sh`.
+
+Compose discovery prefers the directory containing `dev.sh`, then its parent. Set `PROJECT_DIR` in `config/dev.env` for any other location (absolute or relative to the kit). Compose paths are relative to that project root, which is uploaded to Linux. Configuration and runtime state stay inside the kit and are excluded from uploads. Close tunnels before moving the kit.
+
+Full installation accepts an administrative SSH alias or `user@host` on Debian/Ubuntu. It uses existing SSH configuration and interactive sudo when needed. No direct root SSH login is required. Leave `SSH_PORT` empty to honor the alias port. First ensure `ssh your-alias` works using an existing key or password. The installer creates and authorizes a separate project key automatically; add it to ssh-agent if passphrase-protected before running noninteractive check/start commands. Existing-user setup preserves existing SSH authentication without creating another key. New project connections use `project-user@your-alias`, retaining alias host/proxy settings.
+
+See [the updated Russian guide](README.RU.md) for configuration, operation, limitations and tests.
+
+## Reference
 
 Run **your Compose project's services** on a rootless Linux Podman host from macOS or Windows RDP / Git Bash. Source and commands travel over SSH; published TCP ports are forwarded to workstation localhost.
 
@@ -12,21 +22,7 @@ Choose **Server setup → Full installation**, then **Check connection** and **S
 
 ## Put it in your project
 
-Copy `dev.sh`, `setup.sh`, `lib/`, and `config/` into your repository root, **beside its Compose file**. Copying only `dev.sh` is insufficient. Discovery uses the script directory, regardless of the terminal's current directory.
-
-```text
-my-project/
-├── docker-compose.yml
-├── .env
-├── dev.sh
-├── setup.sh
-├── lib/
-├── config/
-│   ├── dev.env.example
-│   ├── required-endpoints.conf
-│   └── dev.env                 # generated, ignored by Git
-└── src/
-```
+Extract the release archive into the repository. It contains one movable `remote-dev/` folder. Keep the scripts, `lib/` and `config/` together inside it. Compose may live beside `dev.sh` (preferred) or in the parent folder. Use `PROJECT_DIR` for other layouts.
 
 Discovery accepts `compose.yaml`, `compose.yml`, `docker-compose.yaml`, or `docker-compose.yml`. Missing or ambiguous files stop startup with an explanation. Set `COMPOSE_FILE` to choose an explicit project-relative path. Automatic discovery also includes one conventional `compose.override.yaml/yml` or `docker-compose.override.yaml/yml`. When setting an explicit main file, specify the override with `COMPOSE_OVERRIDE`.
 
@@ -42,11 +38,11 @@ Linux needs rootless Podman, its user socket, a Compose provider (`docker-compos
 
 Setup creates `config/dev.env` and derives `PROJECT_NAME` from the folder name. Ensure that the project name is unique within the Linux account. Use separate Unix accounts for different developers or trust boundaries.
 
-**Full installation:** choose **Server setup → Full installation**, enter the root SSH target and project username, then review and confirm the server changes. The local username is proposed; Git Bash also lists `/c/Users` profile names.
+**Full installation:** choose **Server setup → Full installation**, enter the administrative SSH target (sudo or root) and project username, then review and confirm the server changes. The local username is proposed; Git Bash also lists `/c/Users` profile names.
 
 On Debian/Ubuntu with systemd, setup:
 
-1. Logs in as root and checks mandatory TCP endpoints from `config/required-endpoints.conf`, using `nc` or timed Bash `/dev/tcp`. A failure stops setup before package installation.
+1. Logs in with existing SSH credentials, elevates with interactive sudo when needed, and checks mandatory TCP endpoints from `config/required-endpoints.conf`, using `nc` or timed Bash `/dev/tcp`. A failure stops setup before package installation.
 2. Installs missing Podman/rootless dependencies, Python 3/PyYAML, `docker.io`, and Compose through apt. It enables the Docker service as part of full installation; the project user is not added to the root-equivalent docker group.
 3. Creates or prepares the Linux user and home directory, sets Bash, and assigns free subordinate UID/GID ranges of at least 65,536 IDs when needed.
 4. Adds the workstation's Ed25519 public key with secure permissions, enables linger, and starts the user's Podman socket. It does not set or change the Linux account password.
@@ -93,12 +89,12 @@ Before starting a new selection, choose **Stop all services (keep volumes)**. Th
 | Setting | Meaning |
 |---|---|
 | `PODMAN_HOST` | First setting: project-user SSH target or alias. |
-| `ROOT_HOST` | Optional root SSH target for full setup. |
-| `SSH_PORT` | SSH port, default 22. |
+| `ROOT_HOST` | Optional administrative SSH target (sudo or root) for full setup. |
+| `SSH_PORT` | Empty uses OpenSSH configuration; an explicit value overrides the alias port. |
 | `SSH_KEY` | Local private-key path, filled by setup. |
 | `PROJECT_NAME` | Unique lowercase Compose project name; letters, digits, `_`, `-`. |
 | `REMOTE_BASE` | Relative path under the Linux home; default `.cache/remote-podman-dev`. |
-| `COMPOSE_FILE` | Empty for discovery beside `dev.sh`, or an explicit relative file. |
+| `COMPOSE_FILE` | Empty for discovery in the chosen project root, or an explicit relative file. |
 | `COMPOSE_OVERRIDE` | Additional Compose file. |
 | `REMOTE_PORT_OFFSET` | Added to each published port for its server port; default 10000. Server ports must be within 1024–65535. |
 | `REQUIRED_ENDPOINTS_FILE` | Mandatory `host\|port\|description` checks for full setup; default `config/required-endpoints.conf`. |

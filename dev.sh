@@ -30,31 +30,34 @@ Remote Podman / Compose
 ./dev.sh full-setup   Optional automation entry to full server setup.
 
 Compose: compose.yaml / compose.yml / docker-compose.yaml / docker-compose.yml
-beside dev.sh; COMPOSE_FILE in config/dev.env overrides discovery.
+beside dev.sh (preferred), otherwise in its parent; PROJECT_DIR selects another root.
+COMPOSE_FILE in config/dev.env overrides discovery.
 EOF
 }
 source "$ROOT_DIR/lib/ui.sh"
 case "${1:-}" in help|-h|--help) usage; exit 0;; '') menu; exit $?;; full-setup) bash "$ROOT_DIR/setup.sh" full; exit $?;; esac
 [[ -f "$CONFIG_FILE" ]] || fail 'Configuration missing. Open ./dev.sh → Server setup.'
-PODMAN_HOST='' ROOT_HOST='' SSH_PORT=22 SSH_KEY='' PROJECT_NAME=myapp
+PODMAN_HOST='' ROOT_HOST='' SSH_PORT= SSH_KEY='' PROJECT_NAME=myapp
+PROJECT_DIR=
 REMOTE_BASE=.cache/remote-podman-dev COMPOSE_FILE='' COMPOSE_OVERRIDE='' REMOTE_PORT_OFFSET=10000
 REQUIRED_ENDPOINTS_FILE=config/required-endpoints.conf
 while IFS='=' read -r key value || [[ -n "${key:-}" ]]; do
     key="${key%$'\r'}"; value="${value%$'\r'}"
   [[ -z "$key" || "$key" == \#* ]] && continue
   case "$key" in
-    PODMAN_HOST|ROOT_HOST|SSH_PORT|SSH_KEY|PROJECT_NAME|REMOTE_BASE|COMPOSE_FILE|COMPOSE_OVERRIDE|REMOTE_PORT_OFFSET|REQUIRED_ENDPOINTS_FILE) printf -v "$key" '%s' "$value";;
+    PROJECT_DIR|PODMAN_HOST|ROOT_HOST|SSH_PORT|SSH_KEY|PROJECT_NAME|REMOTE_BASE|COMPOSE_FILE|COMPOSE_OVERRIDE|REMOTE_PORT_OFFSET|REQUIRED_ENDPOINTS_FILE) printf -v "$key" '%s' "$value";;
     SERVICES_FILE) fail 'Legacy SERVICES_FILE is unsupported. Migrate config using config/dev.env.example and a Compose file.';;
     *) fail "Unknown config setting: $key";;
   esac
 done < "$CONFIG_FILE"
 [[ "$PODMAN_HOST" =~ ^[a-zA-Z0-9_.@:-]+$ && "$PODMAN_HOST" != -* ]] || fail 'Invalid PODMAN_HOST.'
 [[ "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]{0,39}$ ]] || fail 'PROJECT_NAME must use lowercase letters, digits, _ or -.'
-[[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536)) || fail 'Invalid SSH_PORT.'
+[[ -z "$SSH_PORT" ]] || { [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536)); } || fail 'Invalid SSH_PORT.'
 [[ "$REMOTE_PORT_OFFSET" =~ ^[0-9]{1,5}$ ]] || fail 'REMOTE_PORT_OFFSET must be a nonnegative integer.'
 [[ "$REMOTE_BASE" =~ ^[a-zA-Z0-9_./-]+$ && "$REMOTE_BASE" != /* && "$REMOTE_BASE" != *..* && "$REMOTE_BASE" != -* ]] || fail 'Unsafe REMOTE_BASE.'
-SSH_ARGS=(-p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=30 -o ServerAliveCountMax=3)
-if [[ -n "$SSH_KEY" ]]; then [[ -f "$SSH_KEY" ]] || fail "SSH key not found: $SSH_KEY"; SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes); fi
+SSH_ARGS=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=30 -o ServerAliveCountMax=3)
+[[ -z "$SSH_PORT" ]] || SSH_ARGS+=(-p "$SSH_PORT")
+if [[ -n "$SSH_KEY" ]]; then [[ -f "$SSH_KEY" ]] || fail "SSH key not found: $SSH_KEY"; SSH_ARGS+=(-i "$SSH_KEY"); fi
 ssh_to() { ssh "${SSH_ARGS[@]}" "$PODMAN_HOST" "$@"; }
 remote_dir="$REMOTE_BASE/$PROJECT_NAME"
 lock() { umask 077; mkdir -p "$RUNTIME_DIR"; mkdir "$RUNTIME_DIR/operation.lock" 2>/dev/null || fail 'Another project operation is running (or a stale .runtime/operation.lock remains).'; LOCKED=1; }
@@ -73,14 +76,27 @@ install_helper() {
   ssh_to "umask 077; mkdir -p $(quote "$remote_dir") && chmod 700 $(quote "$remote_dir") && cat > $(quote "$temporary") && mv $(quote "$temporary") $(quote "$remote_dir/compose_remote.py")" < "$ROOT_DIR/lib/compose_remote.py" || fail 'Could not transfer the Compose helper.'
 }
 find_compose() {
-  local file candidates=()
+  local file candidates=() directory
+  if [[ -n "$PROJECT_DIR" ]]; then
+    [[ "$PROJECT_DIR" == /* ]] || PROJECT_DIR="$ROOT_DIR/$PROJECT_DIR"
+    PROJECT_DIR="$(CDPATH= cd -- "$PROJECT_DIR" && pwd)" || fail 'Invalid PROJECT_DIR.'
+  else
+    for directory in "$ROOT_DIR" "$(dirname "$ROOT_DIR")"; do
+      for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+        [[ ! -f "$directory/$file" ]] || candidates+=("$file")
+      done
+      if ((${#candidates[@]})); then PROJECT_DIR="$directory"; break; fi
+    done
+    [[ -n "$PROJECT_DIR" ]] || PROJECT_DIR="$ROOT_DIR"
+  fi
+  candidates=()
   if [[ -z "$COMPOSE_FILE" ]]; then
-    for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do [[ ! -f "$ROOT_DIR/$file" ]] || candidates+=("$file"); done
-    ((${#candidates[@]} == 1)) || fail 'Put one Compose file beside dev.sh, or set COMPOSE_FILE explicitly. No fallback to demo services.'
+    for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do [[ ! -f "$PROJECT_DIR/$file" ]] || candidates+=("$file"); done
+    ((${#candidates[@]} == 1)) || fail 'Put one Compose file beside the kit or in its parent, or set PROJECT_DIR / COMPOSE_FILE explicitly. No fallback to demo services.'
     COMPOSE_FILE="${candidates[0]}"
     if [[ -z "$COMPOSE_OVERRIDE" ]]; then
       candidates=()
-      for file in compose.override.yaml compose.override.yml docker-compose.override.yaml docker-compose.override.yml; do [[ ! -f "$ROOT_DIR/$file" ]] || candidates+=("$file"); done
+      for file in compose.override.yaml compose.override.yml docker-compose.override.yaml docker-compose.override.yml; do [[ ! -f "$PROJECT_DIR/$file" ]] || candidates+=("$file"); done
       ((${#candidates[@]} <= 1)) || fail 'Multiple overrides: set COMPOSE_OVERRIDE explicitly.'
       [[ ${#candidates[@]} == 0 ]] || COMPOSE_OVERRIDE="${candidates[0]}"
     fi
@@ -88,7 +104,7 @@ find_compose() {
   COMPOSE_FILES=("$COMPOSE_FILE")
   [[ -z "$COMPOSE_OVERRIDE" ]] || COMPOSE_FILES+=("$COMPOSE_OVERRIDE")
   for file in "${COMPOSE_FILES[@]}"; do
-    [[ "$file" =~ ^[a-zA-Z0-9_./-]+$ && "$file" != /* && "$file" != *..* && -f "$ROOT_DIR/$file" ]] || fail "Invalid Compose path: $file"
+    [[ "$file" =~ ^[a-zA-Z0-9_./-]+$ && "$file" != /* && "$file" != *..* && -f "$PROJECT_DIR/$file" ]] || fail "Invalid Compose path: $file"
   done
   note "Compose source: ${COMPOSE_FILES[*]}"
 }
@@ -112,9 +128,12 @@ prepare() {
   snapshot="$remote_dir/snapshots/$(date +%s)-$$"
   ssh_to "umask 077; mkdir -p $(quote "$snapshot")" || fail 'Cannot create remote snapshot.'
   local exclusions=()
-  [[ ! -f "$ROOT_DIR/.devkitignore" ]] || exclusions=(-X "$ROOT_DIR/.devkitignore")
+  [[ ! -f "$PROJECT_DIR/.devkitignore" ]] || exclusions=(-X "$PROJECT_DIR/.devkitignore")
   note 'Uploading project snapshot over SSH (includes .env and Compose env files).'
-  COPYFILE_DISABLE=1 tar -C "$ROOT_DIR" --exclude=.git --exclude=.runtime --exclude=config/dev.env --exclude=./config/dev.env --exclude=node_modules --exclude=bin --exclude=obj --exclude=__pycache__ "${exclusions[@]}" -cf - . |
+  local kit_relative="${ROOT_DIR#"$PROJECT_DIR"/}"
+  if [[ "$ROOT_DIR" == "$PROJECT_DIR" ]]; then kit_relative=.; fi
+  exclusions+=(--exclude="$kit_relative/config/dev.env" --exclude="$kit_relative/.runtime")
+  COPYFILE_DISABLE=1 tar -C "$PROJECT_DIR" --exclude=.git --exclude=.runtime --exclude=config/dev.env --exclude=./config/dev.env --exclude=node_modules --exclude=bin --exclude=obj --exclude=__pycache__ "${exclusions[@]}" -cf - . |
     ssh_to "umask 077; tar -xf - -C $(quote "$snapshot") && chmod 700 $(quote "$snapshot")" || fail 'Source transfer failed.'
   remote prepare "$snapshot" "$REMOTE_PORT_OFFSET" "${COMPOSE_FILES[@]}" > "$RUNTIME_DIR/report" || fail 'Compose validation failed; no containers started.'
   read_report

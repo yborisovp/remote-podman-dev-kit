@@ -1,0 +1,18 @@
+stages: [test, package]
+default:
+  image: python:3.12-bookworm
+verify:
+  stage: test
+  script:
+    - pip install PyYAML
+    - bash tests/smoke.sh
+    - python3 tests/ui_smoke.py
+    - python3 -m unittest discover -s tests -p 'test_*.py'
+package:
+  stage: package
+  script:
+    - bash scripts/package.sh
+  artifacts:
+    name: remote-dev-$CI_COMMIT_SHORT_SHA
+    paths:
+      - dist/remote-dev.tar.gz
